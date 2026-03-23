@@ -1,0 +1,3 @@
+#define RAFT_IMPLEMENTATION
+#define RAFT_IMPLEMENTATION_EXAMPLE
+#include "raft.h"
