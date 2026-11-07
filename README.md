@@ -6,6 +6,11 @@ exist.
 
 ## Libraries
 
-- [RAFT](https://raft.github.io/raft.pdf)
+- [irc.h](irc.h)
+- [raft.h](raft.h)
+
+## DEPENDENCIES
+
+Dependencies of _these_ dependencies are kept to a minimum. We
 
 ## Simulation
