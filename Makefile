@@ -1,19 +1,18 @@
 LDLIBS=
-CFLAGS=-Wall -g3 -march=native -I./ -MMD -MP
+CFLAGS=-Wall -g3 -march=native -I./
 SRCS=$(wildcard examples/*.c)
 BINS=$(SRCS:%.c=%)
 DEPS=$(SRCS:.c=.d)
-OBJS=$(SRCS:.c=.o)
 
 all: $(BINS)
 
-%: %.o
-	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
+%.d: %.c
+	@$(CC) $(CFLAGS) $< -MM -MT '$(@:.d=) $@' >$@
 
-%.o: %.c
-	$(CC) -c $(CFLAGS) -o $@ $
+%: %.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
 
 -include $(DEPS)
 
 clean:
-	rm -f $(DEPS) $(OBJS) $(BINS)
+	rm -f $(DEPS) $(BINS)

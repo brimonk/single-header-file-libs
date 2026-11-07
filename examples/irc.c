@@ -1,0 +1,3 @@
+#define IRC_IMPLEMENTATION
+#define IRC_IMPLEMENTATION_EXAMPLE
+#include "irc.h"

@@ -1,4 +1,8 @@
 .gdb_history
 *.o
 *.d
+tags
+
+# don't commit binaries
 examples/raft
+examples/irc
