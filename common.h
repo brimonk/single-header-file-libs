@@ -44,6 +44,7 @@ char *bfgets(char *s, size_t n, FILE *fp)
 #define SWAP(a, b) do { typeof((a)) z_ = (b); (b) = (a); (a) = z_; } while (0);
 
 #define streq(a, b) (strcmp((a), (b)) == 0 && strlen((a)) == strlen((b)))
+#define strieq(a, b) (strcasecmp((a), (b)) == 0 && strlen((a)) == strlen((b)))
 #define strneq(a, b) (strncmp((a), (b), strlen((b))) == 0)
 
 char *ltrim(char *s)
