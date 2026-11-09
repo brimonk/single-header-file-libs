@@ -17,6 +17,7 @@
 // TODO IRC
 //
 // - parse message
+// - send PING/PONG messages automatically (we probably don't care about doing that manually)
 //
 // RFCs Implemented:
 //
@@ -44,10 +45,11 @@
 
 #include <stdint.h>
 
-#define IRC_DEFAULTPORT_PLAINTEXT    6667
-#define IRC_DEFAULTPORT_TLS          6697
+#define IRC_DEFAULTPORT_PLAINTEXT 6667
+#define IRC_DEFAULTPORT_TLS       6697
 
-#define IRC_READ_BUFFER_SIZE          512
+#define IRC_READ_BUFFER_SIZE       512
+#define IRC_USERNAME_MAXCHARS       10
 
 // SOURCE: RFC-1459 Section 6.1
 #define IRC_ERR_NOSUCHNICK        401
@@ -172,24 +174,67 @@
 
 // TODO Should we include the reserved numerics somewhere in here?
 
+typedef enum {
+    IRC_CHANNELMODE_CREATOR,
+    IRC_CHANNELMODE_CHANOPPRIV,
+    IRC_CHANNELMODE_VOICEPRIV,
+    IRC_CHANNELMODE_TOGGLEANON,
+    IRC_CHANNELMODE_TOGGLEINVITE,
+    IRC_CHANNELMODE_TOGGLEMOD,
+    IRC_CHANNELMODE_TOGGLEOUTSIDE,
+    IRC_CHANNELMODE_TOGGLEQUIET,
+    IRC_CHANNELMODE_TOGGLEPRIVATE,
+    IRC_CHANNELMODE_TOGGLESECRET,
+    IRC_CHANNELMODE_TOGGLESERVREOP,
+    IRC_CHANNELMODE_TOGGLETOPIC,
+    IRC_CHANNELMODE_CHANNELKEY,
+    IRC_CHANNELMODE_USERLIMIT,
+    IRC_CHANNELMODE_BANMASK,
+    IRC_CHANNELMODE_EXCEPTIONMASK,
+    IRC_CHANNELMODE_INVITATIONMASK,
+    IRC_CHANNELMODE__TOTAL,
+} IRC_ChannelMode;
+
 typedef struct IRC_String8 {
     char *ptr;
     u32 len;
 } IRC_String8;
 
 typedef enum {
-    IRC_RESULT_OK           = 0,
-    IRC_RESULT_SOCKETFAIL   = 1,
-    IRC_RESULT_BINDFAIL     = 2,
-    IRC_RESULT_CONNECTFAIL  = 3,
-    IRC_RESULT_PARAMERR     = 4,
-    IRC_RESULT_PARSEERR     = 5,
-    IRC_RESULT_RECVERR      = 6,
+    IRC_RESULT_OK             = 0,
+    IRC_RESULT_SOCKETFAIL     = 1,
+    IRC_RESULT_BINDFAIL       = 2,
+    IRC_RESULT_CONNECTFAIL    = 3,
+    IRC_RESULT_PARAMERR       = 4,
+    IRC_RESULT_PARSEERR       = 5,
+    IRC_RESULT_RECVERR        = 6,
+    IRC_RESULT_INVALIDCOMMAND = 7,
     IRC_RESULT__TOTAL
 } IRC_Result;
 
 struct IRC_Message;
 typedef struct IRC_Message IRC_Message;
+
+#define IRC_MODEFLAGS_OPER       0x00000001     // 'o'
+#define IRC_MODEFLAGS_PRIVATE    0x00000002     // 'p'
+#define IRC_MODEFLAGS_SECRET     0x00000004     // 's'
+#define IRC_MODEFLAGS_INVITE     0x00000008     // 'i'
+#define IRC_MODEFLAGS_NOMSGS     0x00000010     // 'n'
+#define IRC_MODEFLAGS_MODERATED  0x00000020     // 'm'
+#define IRC_MODEFLAGS_USERLIMIT  0x00000040     // 'l'
+#define IRC_MODEFLAGS_BANMASK    0x00000080     // 'b'
+#define IRC_MODEFLAGS_SPEAK      0x00000100     // 'v'
+#define IRC_MODEFLAGS_KEY        0x00000200     // 'k'
+#define IRC_MODEFLAGS_SERVNOTICE 0x00000400     // 's'
+#define IRC_MODEFLAGS_WALLOPS    0x00000800     // 'w'
+
+#define IRC_MODEFLAGS_INVIS      0x00000008     // 'i'
+
+#define IRC_MODEFLAGS_CHANNEL    0x10000000     // for changing 'channel' modes
+#define IRC_MODEFLAGS_USER       0x20000000     // for changing 'user' modes
+#define IRC_MODEFLAGS_NEGATE     0x80000000     // '-'
+
+typedef u32 IRC_ModeFlags;
 
 typedef enum {
     IRC_CALLBACK__START     =  0,
@@ -201,55 +246,68 @@ typedef enum {
     IRC_CALLBACK_QUIT       =  5,
     IRC_CALLBACK_SQUIT      =  6,
     IRC_CALLBACK_JOIN       =  7,
-    IRC_CALLBACK_MODE       =  8,
-    IRC_CALLBACK_TOPIC      =  9,
-    IRC_CALLBACK_NAMES      = 10,
-    IRC_CALLBACK_LIST       = 11,
-    IRC_CALLBACK_INVITE     = 12,
-    IRC_CALLBACK_KICK       = 13,
-    IRC_CALLBACK_VERSION    = 14,
-    IRC_CALLBACK_STATS      = 15,
-    IRC_CALLBACK_LINKS      = 16,
-    IRC_CALLBACK_TIME       = 17,
-    IRC_CALLBACK_CONNECT    = 18,
-    IRC_CALLBACK_TRACE      = 19,
-    IRC_CALLBACK_ADMIN      = 20,
-    IRC_CALLBACK_INFO       = 21,
-    IRC_CALLBACK_PRIVMSG    = 22,
-    IRC_CALLBACK_NOTICE     = 23,
-    IRC_CALLBACK_WHO        = 24,
-    IRC_CALLBACK_WHOIS      = 25,
-    IRC_CALLBACK_WHOWAS     = 26,
-    IRC_CALLBACK_KILL       = 27,
-    IRC_CALLBACK_PING       = 28,
-    IRC_CALLBACK_PONG       = 29,
-    IRC_CALLBACK_ERROR      = 30,
-    IRC_CALLBACK_AWAY       = 31,
-    IRC_CALLBACK_REHASH     = 32,
-    IRC_CALLBACK_RESTART    = 33,
-    IRC_CALLBACK_SUMMON     = 34,
-    IRC_CALLBACK_USERS      = 35,
-    IRC_CALLBACK_WALLOPS    = 36,
-    IRC_CALLBACK_USERHOST   = 37,
-    IRC_CALLBACK_ISON       = 38,
+    IRC_CALLBACK_PART       =  8,
+    IRC_CALLBACK_MODE       =  9,
+    IRC_CALLBACK_TOPIC      = 10,
+    IRC_CALLBACK_NAMES      = 11,
+    IRC_CALLBACK_LIST       = 12,
+    IRC_CALLBACK_INVITE     = 13,
+    IRC_CALLBACK_KICK       = 14,
+    IRC_CALLBACK_VERSION    = 15,
+    IRC_CALLBACK_STATS      = 16,
+    IRC_CALLBACK_LINKS      = 17,
+    IRC_CALLBACK_TIME       = 18,
+    IRC_CALLBACK_CONNECT    = 19,
+    IRC_CALLBACK_TRACE      = 20,
+    IRC_CALLBACK_ADMIN      = 21,
+    IRC_CALLBACK_INFO       = 22,
+    IRC_CALLBACK_PRIVMSG    = 23,
+    IRC_CALLBACK_NOTICE     = 24,
+    IRC_CALLBACK_WHO        = 25,
+    IRC_CALLBACK_WHOIS      = 26,
+    IRC_CALLBACK_WHOWAS     = 27,
+    IRC_CALLBACK_KILL       = 28,
+    IRC_CALLBACK_PING       = 29,
+    IRC_CALLBACK_PONG       = 30,
+    IRC_CALLBACK_ERROR      = 31,
+    IRC_CALLBACK_AWAY       = 32,
+    IRC_CALLBACK_REHASH     = 33,
+    IRC_CALLBACK_RESTART    = 34,
+    IRC_CALLBACK_SUMMON     = 35,
+    IRC_CALLBACK_USERS      = 36,
+    IRC_CALLBACK_WALLOPS    = 37,
+    IRC_CALLBACK_USERHOST   = 38,
+    IRC_CALLBACK_ISON       = 39,
     IRC_CALLBACK__TOTAL
 } IRC_CallbackKind;
 
 typedef struct IRC_ServerConfig {
     u16 port;
-    i32 use_callbacks;
-    IRC_Result (*fns[IRC_CALLBACK__TOTAL])(IRC_Message *);
+    IRC_Result (*default_callback_fns[IRC_CALLBACK__TOTAL])(IRC_Message *);
+    IRC_Result (*user_callback_fns[IRC_CALLBACK__TOTAL])(IRC_Message *);
 } IRC_ServerConfig;
+
+typedef struct IRC_Member {
+    char username[IRC_USERNAME_MAXCHARS]; // MAX LENGTH OF A USERNAME IS 9 CHARACTERS
+    TcsSocket socket;
+} IRC_Member;
+
+typedef struct IRC_Channel {
+    u32 *members;
+} IRC_Channel;
+
+typedef struct IRC_Server {
+    IRC_ServerConfig config;
+    TcsSocket socket; // the bound socket
+
+    IRC_Member  *members;
+    IRC_Channel *channels;
+} IRC_Server;
 
 typedef struct IRC_ClientConfig {
     char *address;
     u16 port;
 } IRC_ClientConfig;
-
-typedef struct IRC_Server {
-    IRC_ServerConfig config;
-    TcsSocket socket;
-} IRC_Server;
 
 typedef struct IRC_Client {
     IRC_ClientConfig config;
@@ -274,6 +332,9 @@ typedef struct IRC_Message {
 IRC_Result IRC_ServerStart(IRC_ServerConfig config);
 
 #ifdef IRC_IMPLEMENTATION
+static char IRC__CHANNELMODE_CHARACTER[IRC_CHANNELMODE__TOTAL] = {
+    'O', 'o', 'v', 'a', 'i', 'm', 'n', 'q', 'p', 's', 'r', 't', 'k', 'l', 'b', 'e', 'I'
+};
 
 static int IRC__SOCKETS_INIT_COUNT = 0;
 
@@ -310,6 +371,262 @@ IRC_Result IRC_SetServerCallback(IRC_ServerConfig *config, IRC_CallbackKind kind
     return IRC_RESULT_OK;
 }
 
+IRC_Result IRC_HandleServer_NICK(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_PASS(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_USER(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_SERVER(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_OPER(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_QUIT(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_SQUIT(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_JOIN(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_MODE(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_TOPIC(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_NAMES(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_LIST(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_INVITE(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_KICK(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_VERSION(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_STATS(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_LINKS(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_TIME(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_CONNECT(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_TRACE(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_ADMIN(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_INFO(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_PRIVMSG(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_NOTICE(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_WHO(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_WHOIS(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_WHOWAS(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_KILL(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_PING(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_PONG(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_ERROR(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_AWAY(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_REHASH(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_RESTART(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_SUMMON(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_USERS(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_WALLOPS(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_USERHOST(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_HandleServer_ISON(IRC_Message *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_ServerConfig IRC_GetDefaultServerConfig(void)
+{
+    IRC_ServerConfig config = { 0 };
+
+    // TODO Do we default to
+
+    config.port = IRC_DEFAULTPORT_PLAINTEXT;
+
+    config.default_callback_fns[IRC_CALLBACK_NICK]     = IRC_HandleServer_NICK;
+    config.default_callback_fns[IRC_CALLBACK_PASS]     = IRC_HandleServer_PASS;
+    config.default_callback_fns[IRC_CALLBACK_USER]     = IRC_HandleServer_USER;
+    config.default_callback_fns[IRC_CALLBACK_SERVER]   = IRC_HandleServer_SERVER;
+    config.default_callback_fns[IRC_CALLBACK_OPER]     = IRC_HandleServer_OPER;
+    config.default_callback_fns[IRC_CALLBACK_QUIT]     = IRC_HandleServer_QUIT;
+    config.default_callback_fns[IRC_CALLBACK_SQUIT]    = IRC_HandleServer_SQUIT;
+    config.default_callback_fns[IRC_CALLBACK_JOIN]     = IRC_HandleServer_JOIN;
+    config.default_callback_fns[IRC_CALLBACK_MODE]     = IRC_HandleServer_MODE;
+    config.default_callback_fns[IRC_CALLBACK_TOPIC]    = IRC_HandleServer_TOPIC;
+    config.default_callback_fns[IRC_CALLBACK_NAMES]    = IRC_HandleServer_NAMES;
+    config.default_callback_fns[IRC_CALLBACK_LIST]     = IRC_HandleServer_LIST;
+    config.default_callback_fns[IRC_CALLBACK_INVITE]   = IRC_HandleServer_INVITE;
+    config.default_callback_fns[IRC_CALLBACK_KICK]     = IRC_HandleServer_KICK;
+    config.default_callback_fns[IRC_CALLBACK_VERSION]  = IRC_HandleServer_VERSION;
+    config.default_callback_fns[IRC_CALLBACK_STATS]    = IRC_HandleServer_STATS;
+    config.default_callback_fns[IRC_CALLBACK_LINKS]    = IRC_HandleServer_LINKS;
+    config.default_callback_fns[IRC_CALLBACK_TIME]     = IRC_HandleServer_TIME;
+    config.default_callback_fns[IRC_CALLBACK_CONNECT]  = IRC_HandleServer_CONNECT;
+    config.default_callback_fns[IRC_CALLBACK_TRACE]    = IRC_HandleServer_TRACE;
+    config.default_callback_fns[IRC_CALLBACK_ADMIN]    = IRC_HandleServer_ADMIN;
+    config.default_callback_fns[IRC_CALLBACK_INFO]     = IRC_HandleServer_INFO;
+    config.default_callback_fns[IRC_CALLBACK_PRIVMSG]  = IRC_HandleServer_PRIVMSG;
+    config.default_callback_fns[IRC_CALLBACK_NOTICE]   = IRC_HandleServer_NOTICE;
+    config.default_callback_fns[IRC_CALLBACK_WHO]      = IRC_HandleServer_WHO;
+    config.default_callback_fns[IRC_CALLBACK_WHOIS]    = IRC_HandleServer_WHOIS;
+    config.default_callback_fns[IRC_CALLBACK_WHOWAS]   = IRC_HandleServer_WHOWAS;
+    config.default_callback_fns[IRC_CALLBACK_KILL]     = IRC_HandleServer_KILL;
+    config.default_callback_fns[IRC_CALLBACK_PING]     = IRC_HandleServer_PING;
+    config.default_callback_fns[IRC_CALLBACK_PONG]     = IRC_HandleServer_PONG;
+    config.default_callback_fns[IRC_CALLBACK_ERROR]    = IRC_HandleServer_ERROR;
+    config.default_callback_fns[IRC_CALLBACK_AWAY]     = IRC_HandleServer_AWAY;
+    config.default_callback_fns[IRC_CALLBACK_REHASH]   = IRC_HandleServer_REHASH;
+    config.default_callback_fns[IRC_CALLBACK_RESTART]  = IRC_HandleServer_RESTART;
+    config.default_callback_fns[IRC_CALLBACK_SUMMON]   = IRC_HandleServer_SUMMON;
+    config.default_callback_fns[IRC_CALLBACK_USERS]    = IRC_HandleServer_USERS;
+    config.default_callback_fns[IRC_CALLBACK_WALLOPS]  = IRC_HandleServer_WALLOPS;
+    config.default_callback_fns[IRC_CALLBACK_USERHOST] = IRC_HandleServer_USERHOST;
+    config.default_callback_fns[IRC_CALLBACK_ISON]     = IRC_HandleServer_ISON;
+
+    return config;
+}
+
+IRC_ServerConfig IRC__CopyServerConfigFromUser(IRC_ServerConfig config)
+{
+    IRC_ServerConfig useme = IRC_GetDefaultServerConfig();
+
+    useme.port = config.port;
+    memcpy(useme.user_callback_fns, config.user_callback_fns, sizeof(useme.user_callback_fns));
+
+    return useme;
+}
+
 IRC_Result IRC_StartServer(IRC_Server *server, IRC_ServerConfig config)
 {
     TcsResult tresult;
@@ -335,7 +652,7 @@ IRC_Result IRC_StartServer(IRC_Server *server, IRC_ServerConfig config)
         return IRC_RESULT_BINDFAIL;
     }
 
-    server->config = config;
+    server->config = IRC__CopyServerConfigFromUser(config);
     server->socket = tsocket;
 
     return IRC_RESULT_OK;
@@ -392,44 +709,266 @@ IRC_Result IRC_ListenServerWithCallbacks(IRC_Server *server)
         IRC_CallbackKind kind;
         char *string;
     } function_map[] = {
-        { IRC_CALLBACK_NICK,     "nick" },
-        { IRC_CALLBACK_PASS,     "pass" },
-        { IRC_CALLBACK_USER,     "user" },
-        { IRC_CALLBACK_SERVER,   "server" },
-        { IRC_CALLBACK_OPER,     "oper" },
-        { IRC_CALLBACK_QUIT,     "quit" },
-        { IRC_CALLBACK_SQUIT,    "squit" },
-        { IRC_CALLBACK_JOIN,     "join" },
-        { IRC_CALLBACK_MODE,     "mode" },
-        { IRC_CALLBACK_TOPIC,    "topic" },
-        { IRC_CALLBACK_NAMES,    "names" },
-        { IRC_CALLBACK_LIST,     "list" },
-        { IRC_CALLBACK_INVITE,   "invite" },
-        { IRC_CALLBACK_KICK,     "kick" },
-        { IRC_CALLBACK_VERSION,  "version" },
-        { IRC_CALLBACK_STATS,    "stats" },
-        { IRC_CALLBACK_LINKS,    "links" },
-        { IRC_CALLBACK_TIME,     "time" },
-        { IRC_CALLBACK_CONNECT,  "connect" },
-        { IRC_CALLBACK_TRACE,    "trace" },
-        { IRC_CALLBACK_ADMIN,    "admin" },
-        { IRC_CALLBACK_INFO,     "info" },
-        { IRC_CALLBACK_PRIVMSG,  "privmsg" },
-        { IRC_CALLBACK_NOTICE,   "notice" },
-        { IRC_CALLBACK_WHO,      "who" },
-        { IRC_CALLBACK_WHOIS,    "whois" },
-        { IRC_CALLBACK_WHOWAS,   "whowas" },
-        { IRC_CALLBACK_KILL,     "kill" },
+        { IRC_CALLBACK_NICK,     "NICK" },
+        { IRC_CALLBACK_PASS,     "PASS" },
+        { IRC_CALLBACK_USER,     "USER" },
+        { IRC_CALLBACK_SERVER,   "SERVER" },
+        { IRC_CALLBACK_OPER,     "OPER" },
+        { IRC_CALLBACK_QUIT,     "QUIT" },
+        { IRC_CALLBACK_SQUIT,    "SQUIT" },
+        { IRC_CALLBACK_JOIN,     "JOIN" },
+        { IRC_CALLBACK_MODE,     "MODE" },
+        { IRC_CALLBACK_TOPIC,    "TOPIC" },
+        { IRC_CALLBACK_NAMES,    "NAMES" },
+        { IRC_CALLBACK_LIST,     "LIST" },
+        { IRC_CALLBACK_INVITE,   "INVITE" },
+        { IRC_CALLBACK_KICK,     "KICK" },
+        { IRC_CALLBACK_VERSION,  "VERSION" },
+        { IRC_CALLBACK_STATS,    "STATS" },
+        { IRC_CALLBACK_LINKS,    "LINKS" },
+        { IRC_CALLBACK_TIME,     "TIME" },
+        { IRC_CALLBACK_CONNECT,  "CONNECT" },
+        { IRC_CALLBACK_TRACE,    "TRACE" },
+        { IRC_CALLBACK_ADMIN,    "ADMIN" },
+        { IRC_CALLBACK_INFO,     "INFO" },
+        { IRC_CALLBACK_PRIVMSG,  "PRIVMSG" },
+        { IRC_CALLBACK_NOTICE,   "NOTICE" },
+        { IRC_CALLBACK_WHO,      "WHO" },
+        { IRC_CALLBACK_WHOIS,    "WHOIS" },
+        { IRC_CALLBACK_WHOWAS,   "WHOWAS" },
+        { IRC_CALLBACK_KILL,     "KILL" },
     };
 
+    bool command_found = false;
+
     for (i32 i = 0; i < ARRSIZE(function_map); i++) {
-        if (strieq(message.strings[IRC_MESSAGEPART_COMMAND], function_map[i].string)) {
-            iresult = server->config.fns[function_map[i].kind](&message);
+        if (streq(message.strings[IRC_MESSAGEPART_COMMAND], function_map[i].string)) {
+            iresult = server->config.default_callback_fns[function_map[i].kind](&message);
+            command_found = true;
+
+            if (server->config.user_callback_fns[function_map[i].kind]) {
+                iresult = server->config.user_callback_fns[function_map[i].kind](&message);
+            }
+
             break;
         }
     }
 
+    if (!command_found) {
+        iresult = IRC_RESULT_INVALIDCOMMAND;
+    }
+
     return iresult;
+}
+
+IRC_Result IRC_SendClient_NICK(IRC_Client *client, char *nickname)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_SendClient_PASS(IRC_Client *client, char *password)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_SendClient_USER(IRC_Client *client, char *username, char *hostname, char *realname)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_SendClient_OPER(IRC_Client *client, char *username, char *password)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_SendClient_QUIT(IRC_Client *client, char *message)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_SendClient_JOIN(IRC_Client *client, char *channels, char *keys)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_SendClient_PART(IRC_Client *client, char *channels)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_SendClient_MODE(IRC_Client *client, char *thing, IRC_ModeFlags flags, char *arg)
+{
+    return IRC_RESULT_OK;
+}
+
+// Changes the topic to 'topic' for the channel 'channel'.
+IRC_Result IRC_SendClient_TOPIC(IRC_Client *client, char *channel, char *topic)
+{
+    return IRC_RESULT_OK;
+}
+
+// List all nicknames visible to them on any channel the user can see.
+IRC_Result IRC_SendClient_NAMES(IRC_Client *client, char *channels)
+{
+    return IRC_RESULT_OK;
+}
+
+// List channels and their topics.
+IRC_Result IRC_SendClient_LIST(IRC_Client *client, char *channels)
+{
+    return IRC_RESULT_OK;
+}
+
+// Invites a user with 'nickname' to the 'channel'.
+IRC_Result IRC_SendClient_INVITE(IRC_Client *client, char *nickname, char *channel)
+{
+    return IRC_RESULT_OK;
+}
+
+// Forcibly remove the 'user' from the 'channel', optionally sending the 'comment'.
+IRC_Result IRC_SendClient_KICK(IRC_Client *client, char *channel, char *user, char *comment)
+{
+    return IRC_RESULT_OK;
+}
+
+// Return the version of the connected server, optionally 'server' is used to query a specific
+// server in the network.
+IRC_Result IRC_SendClient_VERSION(IRC_Client *client, char *server)
+{
+    return IRC_RESULT_OK;
+}
+
+// Query statistics of a certain server.
+IRC_Result IRC_SendClient_STATS(IRC_Client *client)
+{
+    return IRC_RESULT_OK;
+}
+
+// List all of the servers known by the server answering the query.
+IRC_Result IRC_SendClient_LINKS(IRC_Client *client, char *remote_server, char *server_mask)
+{
+    return IRC_RESULT_OK;
+}
+
+// Query the local time from the (optionally) specified server.
+IRC_Result IRC_SendClient_TIME(IRC_Client *client, char *server)
+{
+    return IRC_RESULT_OK;
+}
+
+// Used to force a server to try to establish a new connection to another server immediately. This
+// is a privileged command and is (probably?) only available to IRC operators.
+IRC_Result IRC_SendClient_CONNECT(IRC_Client *client, char *target_server, u16 port, char *remote_server)
+{
+    return IRC_RESULT_OK;
+}
+
+// Used to find the route to the specified server.
+IRC_Result IRC_SendClient_TRACE(IRC_Client *client, char *server)
+{
+    return IRC_RESULT_OK;
+}
+
+// Used to find the name of the administrator of the server.
+IRC_Result IRC_SendClient_ADMIN(IRC_Client *client, char *server)
+{
+    return IRC_RESULT_OK;
+}
+
+IRC_Result IRC_SendClient_INFO(IRC_Client *client, char *server)
+{
+    return IRC_RESULT_OK;
+}
+
+// Sends a message to 'receiver' - sends all of the text to be sent. Sends nothing on NULL.
+IRC_Result IRC_SendClient_PRIVMSG(IRC_Client *client, char *recipient, char *message)
+{
+    return IRC_RESULT_OK;
+}
+
+// Sends a message to 'nickname', with the 'message'. Almost the same as 'PRIVMSG', but doesn't
+// allow automated replies of any kind.
+IRC_Result IRC_SendClient_NOTICE(IRC_Client *client, char *nickname, char *message)
+{
+    return IRC_RESULT_OK;
+}
+
+// Generates a query which returns a list of information that "matches" the 'name' parameter. If
+// 'operators_only' is true, will only return operators that match.
+IRC_Result IRC_SendClient_WHO(IRC_Client *client, char *name, bool operators_only)
+{
+    return IRC_RESULT_OK;
+}
+
+// Query information about a particular user. If 'server' is provided, will send the query to this
+// particular server. 'nickmasks' is a comma delimited set of nickname masks.
+IRC_Result IRC_SendClient_WHOIS(IRC_Client *client, char *server, char *nickmasks)
+{
+    return IRC_RESULT_OK;
+}
+
+// Asks for information about a nickname that no longer exists. If 'server' is provided, queries
+// only that server.
+IRC_Result IRC_SendClient_WHOWAS(IRC_Client *client, char *nickname, int count, char *server)
+{
+    return IRC_RESULT_OK;
+}
+
+// Causes a client-server communication to be closed by the server. Operator only command.
+IRC_Result IRC_SendClient_KILL(IRC_Client *client, char *nickname, char *comment)
+{
+    return IRC_RESULT_OK;
+}
+
+// Set an automatic reply string for PRIVMSG commands being directed to the client.
+IRC_Result IRC_SendClient_AWAY(IRC_Client *client, char *message)
+{
+    return IRC_RESULT_OK;
+}
+
+// Causes the server to reread and reprocess their configuration file.
+IRC_Result IRC_SendClient_REHASH(IRC_Client *client)
+{
+    return IRC_RESULT_OK;
+}
+
+// Used by an operator to issue a restart command to the server.
+IRC_Result IRC_SendClient_RESTART(IRC_Client *client)
+{
+    return IRC_RESULT_OK;
+}
+
+// Sends a message to the 'user' asking them to join the 'server'.
+IRC_Result IRC_SendClient_SUMMON(IRC_Client *client, char *user, char *server)
+{
+    return IRC_RESULT_OK;
+}
+
+// Returns a list of users connected to the 'server'.
+IRC_Result IRC_SendClient_USERS(IRC_Client *client, char *server)
+{
+    return IRC_RESULT_OK;
+}
+
+// Send 'message' to all connected operators.
+IRC_Result IRC_SendClient_WALLOPS(IRC_Client *client, char *message)
+{
+    return IRC_RESULT_OK;
+}
+
+// Takes up to '5' (in the spec) nicknames, and returns a list of information if that nickname is
+// found.
+IRC_Result IRC_SendClient_USERHOST(IRC_Client *client, char *nicknames[5])
+{
+    return IRC_RESULT_OK;
+}
+
+// Quick way for a client to determine if the given nickname is on. Limited to 5 just like
+// 'USERHOST' above, but the actual spec limit is only limited by how many nicknames you can shove
+// in the 512 byte buffer.
+IRC_Result IRC_SendClient_ISON(IRC_Client *client, char *nicknames[5])
+{
+    return IRC_RESULT_OK;
 }
 
 IRC_Result IRC_ConnectClient(IRC_Client *client, IRC_ClientConfig config)
@@ -469,8 +1008,6 @@ void IRC_ShutdownClient(IRC_Client *client)
 #endif // IRC_IMPLEMENTATION
 
 #ifdef IRC_IMPLEMENTATION_EXAMPLE
-
-#define PORT     7000
 
 void DoServer(void)
 {
