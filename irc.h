@@ -48,7 +48,7 @@
 #define IRC_DEFAULTPORT_PLAINTEXT 6667
 #define IRC_DEFAULTPORT_TLS       6697
 
-#define IRC_READ_BUFFER_SIZE       512
+#define IRC_DEFAULT_BUFFER_SIZE       512
 #define IRC_USERNAME_MAXCHARS       10
 
 // SOURCE: RFC-1459 Section 6.1
@@ -207,6 +207,7 @@ typedef enum {
     IRC_RESULT_CONNECTFAIL    = 3,
     IRC_RESULT_PARAMERR       = 4,
     IRC_RESULT_PARSEERR       = 5,
+    IRC_RESULT_SENDERR        = 6,
     IRC_RESULT_RECVERR        = 6,
     IRC_RESULT_INVALIDCOMMAND = 7,
     IRC_RESULT__TOTAL
@@ -358,6 +359,8 @@ IRC_Result IRC_ParseMessage(IRC_Message *message, char *buffer, size_t buffer_si
 {
     assert(message != NULL);
     assert(buffer != NULL);
+
+    memset(message, 0, sizeof(*message));
 
     return IRC_RESULT_OK;
 }
@@ -669,7 +672,7 @@ void IRC_ShutdownServer(IRC_Server *server)
 IRC_Result IRC_ListenServerFetchMessage(IRC_Server *server, IRC_Message *message)
 {
     // NOTE RFC-1459 suggests that a buffer of 512 bytes is sufficient for one or more IRC messages.
-    uint8_t buffer[IRC_READ_BUFFER_SIZE] = { 0 };
+    uint8_t buffer[IRC_DEFAULT_BUFFER_SIZE] = { 0 };
 
     size_t received_size = 0;
     TcsResult tresult;
@@ -761,214 +764,476 @@ IRC_Result IRC_ListenServerWithCallbacks(IRC_Server *server)
     return iresult;
 }
 
+// IRC_SendSocketF: sends the data on the socket. Caller doesn't need to append \r\n, this function
+// does that.
+__attribute__ ((format (printf, 2, 3)))
+IRC_Result IRC_SendSocketF(TcsSocket *socket, const char *fmt, ...)
+{
+    int rc;
+    char buffer[IRC_DEFAULT_BUFFER_SIZE];
+    va_list ap;
+
+    va_start(ap, fmt);
+    rc = vsnprintf(buffer, sizeof(buffer) - 3, fmt, ap);
+    va_end(ap);
+
+    (void)rc; // ??
+
+    // put our \r\n at the end of our message
+
+    buffer[strlen(buffer)] = '\r';
+    buffer[strlen(buffer)] = '\n';
+    buffer[strlen(buffer)] = '\0';
+
+    size_t to_send_length = MIN(sizeof(buffer), strlen(buffer));
+    size_t sent_length = 0;
+
+    TcsResult sock_result = tcs_send(*socket, (const u8 *)buffer, to_send_length, TCS_FLAG_NONE, &sent_length);
+
+    return sock_result == TCS_SUCCESS ? IRC_RESULT_OK : IRC_RESULT_SENDERR;
+}
+
+// IRC__SeparateList: concatenates a 'list' into 'dst' using 'sep', not exceeding 'len'.
+// Returns 'true' if the whole list fit, 'false' if not. Will not modify 'dst' if there is
+// insufficient space.
+static bool IRC__SeparateList(char *dst, size_t len, char **list, char *sep)
+{
+    size_t required_size = 0;
+
+    for (i32 i = 0; i < arrlen(list); i++) {
+        required_size += strlen(list[i]);
+        if (i < arrlen(list) - 1) {
+            required_size++;
+        }
+    }
+
+    // terminate with NUL
+    required_size++;
+
+    if (required_size > len) {
+        return false;
+    }
+
+    size_t curr_size = 0;
+
+    for (i32 i = 0; i < arrlen(list); i++) {
+        curr_size += snprintf(
+            dst + curr_size,
+            len - curr_size,
+            "%s%s",
+            list[i],
+            i < arrlen(list) - 1 ? sep : ""
+        );
+    }
+
+    return true;
+}
+
+static bool IRC__CommaSeparateList(char *dst, size_t len, char **list)
+{
+    return IRC__SeparateList(dst, len, list, ",");
+}
+
 IRC_Result IRC_SendClient_NICK(IRC_Client *client, char *nickname)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "NICK %s", nickname);
+    return result;
 }
 
 IRC_Result IRC_SendClient_PASS(IRC_Client *client, char *password)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "PASS %s", password);
+    return result;
 }
 
 IRC_Result IRC_SendClient_USER(IRC_Client *client, char *username, char *hostname, char *realname)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "USER %s %s :%s", username, hostname, realname);
+    return result;
 }
 
 IRC_Result IRC_SendClient_OPER(IRC_Client *client, char *username, char *password)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "OPER %s %s", username, password);
+    return result;
 }
 
 IRC_Result IRC_SendClient_QUIT(IRC_Client *client, char *message)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "QUIT %s", message);
+    return result;
 }
 
 IRC_Result IRC_SendClient_JOIN(IRC_Client *client, char *channels, char *keys)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "JOIN %s %s", channels, keys);
+    return result;
+}
+
+IRC_Result IRC_SendClient_JOINList(IRC_Client *client, char **channels, char **keys)
+{
+    char chan_buffer[IRC_DEFAULT_BUFFER_SIZE] = { 0 };
+    char keys_buffer[IRC_DEFAULT_BUFFER_SIZE] = { 0 };
+
+    bool cconcat = IRC__CommaSeparateList(chan_buffer, sizeof chan_buffer, channels);
+    bool kconcat = IRC__CommaSeparateList(keys_buffer, sizeof keys_buffer, keys);
+
+    // WARN
+    //
+    // I guess since this is going to be a user string, we maybe don't want to assert here, but
+    // instead we want to assert like, the channels and keys or something.
+    //
+    // Maybe it's the case that actually, multiple JOIN messages for the various channels, given the
+    // keys array is something that works...
+    //
+    // Whatever the case might be, we'll probably have a situation here at some point. This should
+    // be tested.
+
+    assert(cconcat);
+    assert(kconcat);
+
+    IRC_Result result = IRC_SendClient_JOIN(client, chan_buffer, keys_buffer);
+    return result;
 }
 
 IRC_Result IRC_SendClient_PART(IRC_Client *client, char *channels)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "PART %s", channels);
+    return result;
+}
+
+IRC_Result IRC_SendClient_PARTList(IRC_Client *client, char **channels)
+{
+    char chan_buffer[IRC_DEFAULT_BUFFER_SIZE] = { 0 };
+
+    bool concat = IRC__CommaSeparateList(chan_buffer, sizeof chan_buffer, channels);
+
+    assert(concat);
+
+    IRC_Result result = IRC_SendClient_PART(client, chan_buffer);
+    return result;
 }
 
 IRC_Result IRC_SendClient_MODE(IRC_Client *client, char *thing, IRC_ModeFlags flags, char *arg)
 {
+    // TODO
     return IRC_RESULT_OK;
 }
 
 // Changes the topic to 'topic' for the channel 'channel'.
 IRC_Result IRC_SendClient_TOPIC(IRC_Client *client, char *channel, char *topic)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "TOPIC %s :%s", channel, topic);
+    return result;
 }
 
 // List all nicknames visible to them on any channel the user can see.
 IRC_Result IRC_SendClient_NAMES(IRC_Client *client, char *channels)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "NAMES %s", channels);
+    return result;
 }
 
 // List channels and their topics.
-IRC_Result IRC_SendClient_LIST(IRC_Client *client, char *channels)
+IRC_Result IRC_SendClient_LIST(IRC_Client *client, char *channels, char *server)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result;
+
+    if (server == NULL) {
+        result = IRC_SendSocketF(&client->socket, "LIST %s", channels);
+    } else {
+        result = IRC_SendSocketF(&client->socket, "LIST %s %s", channels, server);
+    }
+
+    return result;
 }
 
 // Invites a user with 'nickname' to the 'channel'.
 IRC_Result IRC_SendClient_INVITE(IRC_Client *client, char *nickname, char *channel)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "INVITE %s %s", nickname, channel);
+    return result;
 }
 
 // Forcibly remove the 'user' from the 'channel', optionally sending the 'comment'.
 IRC_Result IRC_SendClient_KICK(IRC_Client *client, char *channel, char *user, char *comment)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result;
+
+    if (comment == NULL) {
+        result = IRC_SendSocketF(&client->socket, "KICK %s %s", channel, user);
+    } else {
+        result = IRC_SendSocketF(&client->socket, "KICK %s %s :%s", channel, user, comment);
+    }
+
+    return result;
 }
 
 // Return the version of the connected server, optionally 'server' is used to query a specific
 // server in the network.
 IRC_Result IRC_SendClient_VERSION(IRC_Client *client, char *server)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "VERSION");
+    return result;
 }
 
 // Query statistics of a certain server.
 IRC_Result IRC_SendClient_STATS(IRC_Client *client)
 {
+    // TODO
     return IRC_RESULT_OK;
 }
 
 // List all of the servers known by the server answering the query.
-IRC_Result IRC_SendClient_LINKS(IRC_Client *client, char *remote_server, char *server_mask)
+IRC_Result IRC_SendClient_LINKS(IRC_Client *client, char *server_mask, char *remote_server)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result;
+
+    if (remote_server == NULL) {
+        result = IRC_SendSocketF(&client->socket, "LINKS %s", server_mask);
+    } else {
+        result = IRC_SendSocketF(&client->socket, "LINKS %s %s", server_mask, remote_server);
+    }
+
+    return result;
 }
 
 // Query the local time from the (optionally) specified server.
 IRC_Result IRC_SendClient_TIME(IRC_Client *client, char *server)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result;
+
+    if (server == NULL) {
+        result = IRC_SendSocketF(&client->socket, "TIME");
+    } else {
+        result = IRC_SendSocketF(&client->socket, "TIME %s", server);
+    }
+
+    return result;
 }
 
 // Used to force a server to try to establish a new connection to another server immediately. This
 // is a privileged command and is (probably?) only available to IRC operators.
+//
+// Pass 'port' != 0 to add the port, and 'remote_server' != NULL for remote_server.
 IRC_Result IRC_SendClient_CONNECT(IRC_Client *client, char *target_server, u16 port, char *remote_server)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result;
+
+    // NOTE This is not exhaustive for the permutation of inputs.
+
+    if (port == 0 || remote_server == NULL) {
+        result = IRC_SendSocketF(&client->socket, "CONNECT %s", target_server);
+    } else {
+        result = IRC_SendSocketF(&client->socket, "CONNECT %s %hu %s", target_server, port, remote_server);
+    }
+
+    return result;
 }
 
 // Used to find the route to the specified server.
 IRC_Result IRC_SendClient_TRACE(IRC_Client *client, char *server)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result;
+
+    if (server == NULL) {
+        result = IRC_SendSocketF(&client->socket, "TRACE");
+    } else {
+        result = IRC_SendSocketF(&client->socket, "TRACE %s", server);
+    }
+
+    return result;
 }
 
 // Used to find the name of the administrator of the server.
 IRC_Result IRC_SendClient_ADMIN(IRC_Client *client, char *server)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result;
+
+    if (server == NULL) {
+        result = IRC_SendSocketF(&client->socket, "ADMIN");
+    } else {
+        result = IRC_SendSocketF(&client->socket, "ADMIN %s", server);
+    }
+
+    return result;
 }
 
 IRC_Result IRC_SendClient_INFO(IRC_Client *client, char *server)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result;
+
+    if (server == NULL) {
+        result = IRC_SendSocketF(&client->socket, "INFO");
+    } else {
+        result = IRC_SendSocketF(&client->socket, "INFO %s", server);
+    }
+
+    return result;
 }
 
 // Sends a message to 'receiver' - sends all of the text to be sent. Sends nothing on NULL.
-IRC_Result IRC_SendClient_PRIVMSG(IRC_Client *client, char *recipient, char *message)
+IRC_Result IRC_SendClient_PRIVMSG(IRC_Client *client, char *recipients, char *message)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "PRIVMSG %s :%s", recipients, message);
+    return result;
+}
+
+IRC_Result IRC_SendClient_PRIVMSGList(IRC_Client *client, char **recipients, char *message)
+{
+    char csv[IRC_DEFAULT_BUFFER_SIZE] = { 0 };
+
+    bool concat = IRC__CommaSeparateList(csv, sizeof csv, recipients);
+
+    assert(concat);
+
+    IRC_Result result = IRC_SendClient_PRIVMSG(client, csv, message);
+    return result;
 }
 
 // Sends a message to 'nickname', with the 'message'. Almost the same as 'PRIVMSG', but doesn't
 // allow automated replies of any kind.
 IRC_Result IRC_SendClient_NOTICE(IRC_Client *client, char *nickname, char *message)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "NOTICE %s :%s", nickname, message);
+    return result;
 }
 
 // Generates a query which returns a list of information that "matches" the 'name' parameter. If
 // 'operators_only' is true, will only return operators that match.
 IRC_Result IRC_SendClient_WHO(IRC_Client *client, char *name, bool operators_only)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "WHO %s%s", name, operators_only ? " o" : "");
+    return result;
 }
 
 // Query information about a particular user. If 'server' is provided, will send the query to this
 // particular server. 'nickmasks' is a comma delimited set of nickname masks.
 IRC_Result IRC_SendClient_WHOIS(IRC_Client *client, char *server, char *nickmasks)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result;
+   
+    result = IRC_SendSocketF(&client->socket, "WHOIS %s%s%s",
+        server == NULL ? "" : server,
+        server == NULL ? "" : " ",
+        nickmasks == NULL ? "" : nickmasks
+    );
+
+    return result;
 }
 
 // Asks for information about a nickname that no longer exists. If 'server' is provided, queries
 // only that server.
+//
+// For sending no count, set 'count' <= 0, no server, set 'server' to NULL
 IRC_Result IRC_SendClient_WHOWAS(IRC_Client *client, char *nickname, int count, char *server)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result;
+
+    // this is silly, and I shouldn't do it like this
+
+    if (count <= 0) {
+        result = IRC_SendSocketF(&client->socket, "WHOWAS %s%s%s",
+            nickname,
+            server == NULL ? "" : " ",
+            server == NULL ? "" : server
+        );
+    } else {
+        result = IRC_SendSocketF(&client->socket, "WHOWAS %s %d%s%s",
+            nickname,
+            count,
+            server == NULL ? "" : " ",
+            server == NULL ? "" : server
+        );
+    }
+
+    return result;
 }
 
 // Causes a client-server communication to be closed by the server. Operator only command.
 IRC_Result IRC_SendClient_KILL(IRC_Client *client, char *nickname, char *comment)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "KILL %s%s%s",
+        nickname,
+        comment == NULL ? "" : " ",
+        comment == NULL ? "" : comment
+    );
+    return result;
 }
 
 // Set an automatic reply string for PRIVMSG commands being directed to the client.
 IRC_Result IRC_SendClient_AWAY(IRC_Client *client, char *message)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "AWAY%s%s",
+        message == NULL ? "" : " ",
+        message == NULL ? "" : message
+    );
+    return result;
 }
 
 // Causes the server to reread and reprocess their configuration file.
 IRC_Result IRC_SendClient_REHASH(IRC_Client *client)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "REHASH");
+    return result;
 }
 
 // Used by an operator to issue a restart command to the server.
 IRC_Result IRC_SendClient_RESTART(IRC_Client *client)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "RESTART");
+    return result;
 }
 
 // Sends a message to the 'user' asking them to join the 'server'.
 IRC_Result IRC_SendClient_SUMMON(IRC_Client *client, char *user, char *server)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "SUMMON %s%s%s",
+        user,
+        server == NULL ? "" : " ",
+        server == NULL ? "" : server
+    );
+    return result;
 }
 
 // Returns a list of users connected to the 'server'.
 IRC_Result IRC_SendClient_USERS(IRC_Client *client, char *server)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "USERS%s%s",
+        server == NULL ? "" : " ",
+        server == NULL ? "" : server
+    );
+    return result;
 }
 
-// Send 'message' to all connected operators.
-IRC_Result IRC_SendClient_WALLOPS(IRC_Client *client, char *message)
+IRC_Result IRC_SendClient_USERHOST(IRC_Client *client, char *nicknames)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "USERHOST %s", nicknames);
+    return result;
 }
 
-// Takes up to '5' (in the spec) nicknames, and returns a list of information if that nickname is
-// found.
-IRC_Result IRC_SendClient_USERHOST(IRC_Client *client, char *nicknames[5])
+IRC_Result IRC_SendClient_USERHOSTList(IRC_Client *client, char **nicknames)
 {
-    return IRC_RESULT_OK;
+    char csv[IRC_DEFAULT_BUFFER_SIZE] = { 0 };
+    bool concat = IRC__CommaSeparateList(csv, sizeof csv, nicknames);
+    assert(concat);
+    IRC_Result result = IRC_SendClient_USERHOST(client, csv);
+    return result;
 }
 
-// Quick way for a client to determine if the given nickname is on. Limited to 5 just like
-// 'USERHOST' above, but the actual spec limit is only limited by how many nicknames you can shove
-// in the 512 byte buffer.
-IRC_Result IRC_SendClient_ISON(IRC_Client *client, char *nicknames[5])
+IRC_Result IRC_SendClient_ISON(IRC_Client *client, char *nicknames)
 {
-    return IRC_RESULT_OK;
+    IRC_Result result = IRC_SendSocketF(&client->socket, "ISON %s", nicknames);
+    return result;
+}
+
+IRC_Result IRC_SendClient_ISONList(IRC_Client *client, char **nicknames)
+{
+    char csv[IRC_DEFAULT_BUFFER_SIZE] = { 0 };
+    bool concat = IRC__SeparateList(csv, sizeof csv, nicknames, " ");
+    assert(concat);
+    IRC_Result result = IRC_SendClient_ISON(client, csv);
+    return result;
 }
 
 IRC_Result IRC_ConnectClient(IRC_Client *client, IRC_ClientConfig config)
