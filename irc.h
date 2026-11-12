@@ -208,8 +208,8 @@ typedef enum {
     IRC_RESULT_PARAMERR       = 4,
     IRC_RESULT_PARSEERR       = 5,
     IRC_RESULT_SENDERR        = 6,
-    IRC_RESULT_RECVERR        = 6,
-    IRC_RESULT_INVALIDCOMMAND = 7,
+    IRC_RESULT_RECVERR        = 7,
+    IRC_RESULT_INVALIDCOMMAND = 8,
     IRC_RESULT__TOTAL
 } IRC_Result;
 
