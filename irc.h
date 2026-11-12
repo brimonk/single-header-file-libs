@@ -43,6 +43,9 @@
 #define TINYCSOCKET_IMPLEMENTATION
 #include "tinycsocket.h"
 
+// TODO include our TLS library of choice in here, probably right here
+// TODO we need a way to abstract over our TLS library, and our sockets library, and whatnot
+
 #include <stdint.h>
 
 #define IRC_DEFAULTPORT_PLAINTEXT 6667
